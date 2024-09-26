@@ -63,7 +63,8 @@ const TabBarMore = react.memo(({ items, switchTo, lockIn }) => {
 });
 
 const TopBarContent = ({ links, activeLink, lockLink, switchCallback, lockCallback }) => {
-	const resizeHost = document.querySelector(".Root__main-view .os-resize-observer-host");
+	const resizeHost =
+		document.querySelector(".Root__main-view .os-resize-observer-host") ?? document.querySelector(".Root__main-view .os-size-observer");
 	const [windowSize, setWindowSize] = useState(resizeHost.clientWidth);
 	const resizeHandler = () => setWindowSize(resizeHost.clientWidth);
 
@@ -196,7 +197,7 @@ const TabBar = react.memo(({ links, activeLink, lockLink, switchCallback, lockCa
 						items: droplistItem.map(i => options[i]).filter(Boolean),
 						switchTo: switchCallback,
 						lockIn: lockCallback
-				  })
+					})
 				: null
 		)
 	);

@@ -45,7 +45,7 @@ jobs:
         run: echo "IS_UNIX=${{ matrix.os != 'windows' && matrix.arch != '386' }}" >> $GITHUB_ENV
 
       - name: Is Windows Platform
-        run: echo "IS_WIN=${{ matrix.os == 'windows' && matrix.arch != 'arm64' }}" >> $GITHUB_ENV
+        run: echo "IS_WIN=${{ matrix.os == 'windows' }}" >> $GITHUB_ENV
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -78,7 +78,7 @@ jobs:
         if: env.IS_WIN == 'true'
         uses: edgarrc/action-7z@v1
         with:
-          args: 7z a -bb0 -mx9 "spicetify-${{ env.TAG }}-${{ matrix.os }}-${{ matrix.arch == 'amd64' && 'x64' || 'x32' }}.zip" "./spicetify.exe" "./CustomApps" "./Extensions" "./Themes" "./jsHelper" "globals.d.ts" "css-map.json"
+          args: 7z a -bb0 -mx9 "spicetify-${{ env.TAG }}-${{ matrix.os }}-${{ (matrix.arch == 'amd64' && 'x64') || (matrix.arch == 'arm64' && 'arm64') || 'x32' }}.zip" "./spicetify.exe" "./CustomApps" "./Extensions" "./Themes" "./jsHelper" "globals.d.ts" "css-map.json"
 
       - name: Release
         if: env.IS_UNIX == 'true' || env.IS_WIN == 'true'
@@ -98,19 +98,6 @@ jobs:
         with:
           url: https://vps.itsmeow.dev/spicetify-update
           method: GET
-      - name: Update Homebrew tap
-        uses: mislav/bump-homebrew-formula-action@v3
-        if: ${{ !contains(github.ref, '-') }}
-        with:
-          formula-name: spicetify-cli
-          formula-path: spicetify-cli.rb
-          homebrew-tap: spicetify/homebrew-tap
-          base-branch: main
-          download-url: https://github.com/spicetify/spicetify-cli/archive/${{ github.ref_name }}.tar.gz
-          commit-message: |
-            feat: {{version}} release
-        env:
-          COMMITTER_TOKEN: ${{ secrets.SPICETIFY_GITHUB_TOKEN }}
       - name: Update Winget package
         uses: vedantmgoyal2009/winget-releaser@v2
         with:

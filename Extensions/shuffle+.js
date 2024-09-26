@@ -12,6 +12,7 @@
 
 	const { React } = Spicetify;
 	const { useState } = React;
+	let playbarButton = null;
 
 	function getConfig() {
 		try {
@@ -22,7 +23,7 @@
 			throw "";
 		} catch {
 			Spicetify.LocalStorage.set("shufflePlus:settings", "{}");
-			return { artistMode: "all", artistNameMust: false };
+			return { artistMode: "all", artistNameMust: false, enableQueueButton: false };
 		}
 	}
 
@@ -180,12 +181,18 @@
 			React.createElement(checkBoxItem, {
 				name: "Chosen artist must be included",
 				field: "artistNameMust"
+			}),
+			React.createElement(checkBoxItem, {
+				name: "Enable Shuffle+ Queue Tracks button in Playbar",
+				field: "enableQueueButton",
+				onclickFun: () => renderQueuePlaybarButton()
 			})
 		);
 
 		Spicetify.PopupModal.display({
 			title: "Shuffle+",
-			content: settingsDOMContent
+			content: settingsDOMContent,
+			isLarge: true
 		});
 	}
 
@@ -265,6 +272,24 @@
 		"playlist-folder"
 	).register();
 
+	renderQueuePlaybarButton();
+	function renderQueuePlaybarButton() {
+		if (!playbarButton) {
+			playbarButton = new Spicetify.Playbar.Button(
+				"Shuffle+ Queue Tracks",
+				"enhance",
+				async () => {
+					await fetchAndPlay("queue");
+				},
+				false,
+				false
+			);
+		}
+
+		if (CONFIG.enableQueueButton) playbarButton.register();
+		else playbarButton.deregister();
+	}
+
 	async function fetchPlaylistTracks(uri) {
 		const res = await Spicetify.CosmosAsync.get(`sp://core-playlist/v1/playlist/spotify:playlist:${uri}/rows`, {
 			policy: { link: true, playable: true }
@@ -308,7 +333,7 @@
 
 	async function fetchAlbumTracks(uri, includeMetadata = false) {
 		const { queryAlbumTracks } = Spicetify.GraphQL.Definitions;
-		const { data, errors } = await Spicetify.GraphQL.Request(queryAlbumTracks, { uri, offset: 0, limit: 500 });
+		const { data, errors } = await Spicetify.GraphQL.Request(queryAlbumTracks, { uri, offset: 0, limit: 100 });
 
 		if (errors) throw errors[0].message;
 		if (data.albumUnion.playability.playable === false) throw "Album is not playable";
@@ -343,7 +368,14 @@
 	}
 
 	async function fetchArtistTracks(uri) {
-		const { queryArtistDiscographyAll, queryArtistOverview } = Spicetify.GraphQL.Definitions;
+		const { queryArtistDiscographyAll } = Spicetify.GraphQL.Definitions;
+		// Definition from older Spotify version
+		const queryArtistOverview = {
+			name: "queryArtistOverview",
+			operation: "query",
+			sha256Hash: "35648a112beb1794e39ab931365f6ae4a8d45e65396d641eeda94e4003d41497",
+			value: null
+		};
 
 		const discography = await Spicetify.GraphQL.Request(queryArtistDiscographyAll, {
 			uri,
@@ -405,6 +437,16 @@
 		const res = await Spicetify.Platform.LocalFilesAPI.getTracks();
 
 		return res.map(track => track.uri);
+	}
+
+	function fetchQueue() {
+		const { _queueState } = Spicetify.Platform.PlayerAPI._queue;
+		const nextUp = _queueState.nextUp.map(track => track.uri);
+		const queued = _queueState.queued.map(track => track.uri);
+		const array = [...new Set([...nextUp, ...queued])];
+		const current = _queueState.current?.uri;
+		if (current) array.push(current);
+		return array;
 	}
 
 	async function fetchCollection(uriObj) {
@@ -528,7 +570,10 @@
 		let uri;
 
 		try {
-			if (typeof rawUri === "object") {
+			if (rawUri === "queue") {
+				list = fetchQueue();
+				context = null;
+			} else if (typeof rawUri === "object") {
 				list = rawUri;
 				context = null;
 			} else {

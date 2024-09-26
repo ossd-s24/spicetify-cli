@@ -90,9 +90,7 @@ window.Spicetify = {
 			return await Spicetify.Player.origin.play({ uri: uri }, context, options);
 		},
 		removeEventListener: (type, callback) => {
-			if (!(type in Spicetify.Player.eventListeners)) {
-				return;
-			}
+			if (!(type in Spicetify.Player.eventListeners)) return;
 			const stack = Spicetify.Player.eventListeners[type];
 			for (let i = 0; i < stack.length; i++) {
 				if (stack[i] === callback) {
@@ -163,9 +161,6 @@ window.Spicetify = {
 					"Topbar",
 					"ReactComponent",
 					"PopupModal",
-					"_cloneSidebarItem",
-					// Deprecated since Spotify 1.2.14
-					// "_sidebarItemToClone",
 					"SVGIcons",
 					"colorExtractor",
 					"test",
@@ -182,7 +177,6 @@ window.Spicetify = {
 					"_getStyledClassName",
 					"GraphQL",
 					"ReactHook",
-					"_sidebarXItemToClone",
 					"AppTitle",
 					"_reservedPanelIds",
 					"ReactFlipToolkit",
@@ -193,7 +187,8 @@ window.Spicetify = {
 					"ReactDOMServer",
 					"Snackbar",
 					"ContextMenuV2",
-					"ReactJSX"
+					"ReactJSX",
+					"_renderNavLinks"
 				])
 			},
 			{
@@ -270,13 +265,28 @@ window.Spicetify = {
 					"StoreProvider",
 					"PlatformProvider",
 					"Dropdown",
-					"MenuSubMenuItem"
+					"MenuSubMenuItem",
+					"Navigation",
+					"ScrollableContainer"
 				])
 			},
 			{
 				objectToCheck: Spicetify.ReactComponent.Cards,
 				name: "Spicetify.ReactComponent.Cards",
-				methods: new Set(["Default", "Hero", "CardImage", "Album", "Artist", "Audiobook", "Episode", "Playlist", "Profile", "Show", "Track"])
+				methods: new Set([
+					"Default",
+					"Hero",
+					"CardImage",
+					"Album",
+					"Artist",
+					"Audiobook",
+					"Episode",
+					"Playlist",
+					"Profile",
+					"Show",
+					"Track",
+					"FeatureCard"
+				])
 			},
 			{
 				objectToCheck: Spicetify.ReactHook,
@@ -428,7 +438,29 @@ window.Spicetify = {
 				return Object.values(module);
 			} catch {}
 		});
+	// polyfill for chromium <117
+	const groupBy = (values, keyFinder) => {
+		if (typeof Object.groupBy === "function") return Object.groupBy(values, keyFinder);
+		return values.reduce((a, b) => {
+			const key = typeof keyFinder === "function" ? keyFinder(b) : b[keyFinder];
+			a[key] = a[key] ? [...a[key], b] : [b];
+			return a;
+		}, {});
+	};
 	const functionModules = modules.filter(module => typeof module === "function");
+	const exportedReactObjects = groupBy(modules.filter(Boolean), x => x.$$typeof);
+	const exportedMemos = exportedReactObjects[Symbol.for("react.memo")];
+	const exportedForwardRefs = exportedReactObjects[Symbol.for("react.forward_ref")];
+	const exportedMemoFRefs = exportedMemos.filter(m => m.type.$$typeof === Symbol.for("react.forward_ref"));
+	const exposeReactComponentsUI = ({ modules, functionModules, exportedForwardRefs }) => {
+		const componentNames = Object.keys(modules.filter(Boolean).find(e => e.BrowserDefaultFocusStyleProvider));
+		const componentRegexes = componentNames.map(n => new RegExp(`"data-encore-id":(?:[a-zA-Z_\$][\w\$]*\\.){2}${n}\\b`));
+		const componentPairs = [functionModules.map(f => [f, f]), exportedForwardRefs.map(f => [f.render, f])]
+			.flat()
+			.map(([s, f]) => [componentNames.find((_, i) => s.toString().match(componentRegexes[i])), f]);
+		return Object.fromEntries(componentPairs);
+	};
+	const reactComponentsUI = exposeReactComponentsUI({ modules, functionModules, exportedForwardRefs });
 
 	const knownMenuTypes = ["album", "show", "artist", "track"];
 	const menus = modules
@@ -480,6 +512,10 @@ window.Spicetify = {
 		ReactJSX: cache.find(m => m?.jsx),
 		ReactDOM: cache.find(m => m?.createPortal),
 		ReactDOMServer: cache.find(m => m?.renderToString),
+		// classnames for 1.2.13
+		classnames: cache
+			.filter(module => typeof module === "function")
+			.find(module => module.toString().includes('"string"') && module.toString().includes("[native code]")),
 		Color: functionModules.find(m => m.toString().includes("static fromHex") || m.toString().includes("this.rgb")),
 		Player: {
 			...Spicetify.Player,
@@ -491,25 +527,6 @@ window.Spicetify = {
 			...Spicetify.GraphQL,
 			get Request() {
 				return Spicetify.Platform?.GraphQLLoader || Spicetify.GraphQL.Handler?.(Spicetify.GraphQL.Context);
-			},
-			get QueryDefinitions() {
-				return Object.fromEntries(
-					Object.entries(Spicetify.GraphQL.Definitions).filter(([, value]) =>
-						value.definitions.some(def => def.kind === "OperationDefinition" && def.operation === "query")
-					)
-				);
-			},
-			get MutationDefinitions() {
-				return Object.fromEntries(
-					Object.entries(Spicetify.GraphQL.Definitions).filter(([, value]) =>
-						value.definitions.some(def => def.kind === "OperationDefinition" && def.operation === "mutation")
-					)
-				);
-			},
-			get ResponseDefinitions() {
-				return Object.fromEntries(
-					Object.entries(Spicetify.GraphQL.Definitions).filter(([, value]) => value.definitions.every(def => def.kind !== "OperationDefinition"))
-				);
 			},
 			Context: functionModules.find(m => m.toString().includes("subscription") && m.toString().includes("mutation")),
 			Handler: functionModules.find(m => m.toString().includes("GraphQL subscriptions are not supported"))
@@ -530,27 +547,38 @@ window.Spicetify = {
 					m.toString().includes("action") && m.toString().includes("open") && m.toString().includes("trigger") && m.toString().includes("right-click")
 			),
 			TooltipWrapper: functionModules.find(m => m.toString().includes("renderInline") && m.toString().includes("showDelay")),
-			ButtonPrimary: modules.find(m => m?.render && m?.displayName === "ButtonPrimary"),
-			ButtonSecondary: modules.find(m => m?.render && m?.displayName === "ButtonSecondary"),
-			ButtonTertiary: modules.find(m => m?.render && m?.displayName === "ButtonTertiary"),
+			ButtonPrimary: reactComponentsUI.ButtonPrimary,
+			ButtonSecondary: reactComponentsUI.ButtonSecondary,
+			ButtonTertiary: reactComponentsUI.ButtonTertiary,
 			Snackbar: {
 				wrapper: functionModules.find(m => m.toString().includes("encore-light-theme") && m.toString().includes("elevated")),
 				simpleLayout: functionModules.find(m => ["leading", "center", "trailing"].every(keyword => m.toString().includes(keyword))),
 				ctaText: functionModules.find(m => m.toString().includes("ctaText")),
 				styledImage: functionModules.find(m => m.toString().includes("placeholderSrc"))
 			},
-			Chip: modules.find(m => m?.render?.toString().includes("invertedDark") && m?.render?.toString().includes("isUsingKeyboard")),
+			Chip: reactComponentsUI.Chip,
 			Toggle: functionModules.find(m => m.toString().includes("onSelected") && m.toString().includes('type:"checkbox"')),
 			Cards: {
-				Default: functionModules.find(m => m?.toString().includes('"card-click-handler"')),
+				Default: reactComponentsUI.Card,
+				FeatureCard: functionModules.find(
+					m => m.toString().includes("?highlight") && m.toString().includes("headerText") && m.toString().includes("imageContainer")
+				),
 				Hero: functionModules.find(m => m?.toString().includes('"herocard-click-handler"')),
-				CardImage: functionModules.find(m => m.toString().includes("isHero") && m.toString().includes("withWaves")),
+				CardImage: functionModules.find(
+					m =>
+						m.toString().includes("isHero") &&
+						(m.toString().includes("withWaves") || m.toString().includes("isCircular")) &&
+						m.toString().includes("imageWrapper")
+				),
 				...Object.fromEntries(cards)
 			},
 			Router: functionModules.find(m => m.toString().includes("navigationType") && m.toString().includes("static")),
 			Routes: functionModules.find(m => m.toString().match(/\([\w$]+\)\{let\{children:[\w$]+,location:[\w$]+\}=[\w$]+/)),
 			Route: functionModules.find(m => m.toString().match(/^function [\w$]+\([\w$]+\)\{\(0,[\w$]+\.[\w$]+\)\(\!1\)\}$/)),
 			StoreProvider: functionModules.find(m => m.toString().includes("notifyNestedSubs") && m.toString().includes("serverState")),
+			Navigation: exportedMemoFRefs.find(m => m.type.render.toString().includes("navigationalRoot")),
+			ScrollableContainer: functionModules.find(m => m.toString().includes("scrollLeft") && m.toString().includes("showButtons")),
+			IconComponent: reactComponentsUI.Icon,
 			...Object.fromEntries(menus)
 		},
 		ReactHook: {
@@ -671,7 +699,7 @@ window.Spicetify = {
 	// classnames
 	// https://github.com/JedWatson/classnames/
 	const classnamesChunk = chunks.find(([_, value]) => value.toString().includes("[native code]") && !value.toString().includes("<anonymous>"));
-	if (classnamesChunk) {
+	if (classnamesChunk && !Spicetify.classnames) {
 		Spicetify.classnames = Object.values(require(classnamesChunk[0])).find(m => typeof m === "function");
 	}
 
@@ -715,6 +743,7 @@ window.Spicetify = {
 					autoHideDuration: msTimeout
 				});
 			};
+
 			return;
 		}
 
@@ -848,6 +877,7 @@ window.Spicetify = {
 	})();
 
 	Spicetify.Events.webpackLoaded.fire();
+	refreshNavLinks?.();
 })();
 
 Spicetify.Events = (() => {
@@ -903,6 +933,23 @@ Spicetify.Events = (() => {
 
 		playerState.cache = playerState.current;
 	});
+
+	(function waitProductStateAPI() {
+		if (!Spicetify.Platform?.UserAPI) {
+			setTimeout(waitProductStateAPI, 100);
+			return;
+		}
+
+		const productState = Spicetify.Platform.UserAPI._product_state || Spicetify.Platform.UserAPI._product_state_service;
+		if (productState) return;
+		if (!Spicetify.Platform?.ProductStateAPI) {
+			setTimeout(waitProductStateAPI, 100);
+			return;
+		}
+
+		const productStateApi = Spicetify.Platform.ProductStateAPI.productStateApi;
+		Spicetify.Platform.UserAPI._product_state_service = productStateApi;
+	})();
 
 	setInterval(() => {
 		if (playerState.cache?.isPaused === false) {
@@ -965,9 +1012,15 @@ Spicetify._getStyledClassName = (args, component) => {
 		"position",
 		"data-encore-id",
 		"$size",
-		"$iconColor"
+		"$iconColor",
+		"$variant",
+		"$semanticColor",
+		"$buttonSize",
+		"$position",
+		"$iconSize"
 	];
-	const customKeys = ["padding", "blocksize"];
+	const customKeys = ["blocksize"];
+	const customExactKeys = ["$padding", "$paddingBottom", "paddingBottom", "padding"];
 
 	const element = Array.from(args).find(
 		e =>
@@ -975,6 +1028,7 @@ Spicetify._getStyledClassName = (args, component) => {
 			e?.dangerouslySetInnerHTML ||
 			typeof e?.className !== "undefined" ||
 			includedKeys.some(key => typeof e?.[key] !== "undefined") ||
+			customExactKeys.some(key => typeof e?.[key] !== "undefined") ||
 			customKeys.some(key => Object.keys(e).some(k => k.toLowerCase().includes(key)))
 	);
 
@@ -988,13 +1042,14 @@ Spicetify._getStyledClassName = (args, component) => {
 		}
 	}
 
-	const excludedKeys = ["children", "className", "style", "dir", "key", "ref", "as", "$autoMirror", ""];
+	const excludedKeys = ["children", "className", "style", "dir", "key", "ref", "as", "$autoMirror", "$hasFocus", ""];
 	const excludedPrefix = ["aria-"];
 
-	const childrenProps = ["iconLeading", "iconTrailing", "iconOnly"];
+	const childrenProps = ["iconLeading", "iconTrailing", "iconOnly", "$iconOnly", "$iconLeading", "$iconTrailing"];
 
 	for (const key of childrenProps) {
-		if (element[key]) className += `-${key}`;
+		const sanitizedKey = key.startsWith("$") ? key.slice(1) : key;
+		if (element[key]) className += `-${sanitizedKey}`;
 	}
 
 	const booleanKeys = Object.keys(element).filter(key => typeof element[key] === "boolean" && element[key]);
@@ -1002,15 +1057,18 @@ Spicetify._getStyledClassName = (args, component) => {
 	for (const key of booleanKeys) {
 		if (excludedKeys.includes(key)) continue;
 		if (excludedPrefix.some(prefix => key.startsWith(prefix))) continue;
-		className += `-${key}`;
+		const sanitizedKey = key.startsWith("$") ? key.slice(1) : key;
+		className += `-${sanitizedKey}`;
 	}
 
 	const customEntries = Object.entries(element).filter(
-		([key, value]) => customKeys.some(k => key.toLowerCase().includes(k)) && typeof value === "string" && value.length
+		([key, value]) =>
+			(customKeys.some(k => key.toLowerCase().includes(k)) || customExactKeys.some(k => key === k)) && typeof value === "string" && value.length
 	);
 
 	for (const [key, value] of customEntries) {
-		className += `-${key}_${value.replace(/[^a-z0-9]/gi, "_")}`;
+		const sanitizedKey = key.startsWith("$") ? key.slice(1) : key;
+		className += `-${sanitizedKey}_${value.replace(/[^a-z0-9]/gi, "_")}`;
 	}
 
 	return className;
@@ -1018,7 +1076,7 @@ Spicetify._getStyledClassName = (args, component) => {
 
 Spicetify.getFontStyle = font => {
 	if (!font || !Spicetify._fontStyle) return;
-	let rawStyle = Spicetify._fontStyle({ variant: font })
+	let rawStyle = Spicetify._fontStyle({ variant: font, $variant: font })
 		.filter(style => typeof style === "string")
 		.join("");
 	// Clean up empty rulesets
@@ -1342,7 +1400,10 @@ Spicetify.SVGIcons = {
 	let subRequest;
 
 	// product_state was renamed to product_state_service in Spotify 1.2.21
-	const productState = Spicetify.Platform.UserAPI?._product_state || Spicetify.Platform.UserAPI?._product_state_service;
+	const productState =
+		Spicetify.Platform.UserAPI?._product_state ||
+		Spicetify.Platform.UserAPI?._product_state_service ||
+		Spicetify.Platform?.ProductStateAPI.productStateApi;
 
 	Spicetify.AppTitle = {
 		set: async name => {
@@ -1388,6 +1449,26 @@ Spicetify.SVGIcons = {
 	return document.head.appendChild(fontStyle);
 })();
 
+function parseIcon(icon, size = 16) {
+	if (icon && Spicetify.SVGIcons[icon]) {
+		return `<svg height="${size}" width="${size}" viewBox="0 0 ${size} ${size}" fill="currentColor">${Spicetify.SVGIcons[icon]}</svg>`;
+	}
+	return icon || "";
+}
+
+function createIconComponent(icon, size = 16) {
+	return Spicetify.React.createElement(
+		Spicetify.ReactComponent.IconComponent,
+		{
+			iconSize: size,
+			dangerouslySetInnerHTML: {
+				__html: parseIcon(icon)
+			}
+		},
+		null
+	);
+}
+
 Spicetify.ContextMenuV2 = (() => {
 	const registeredItems = new Map();
 
@@ -1406,26 +1487,6 @@ Spicetify.ContextMenuV2 = (() => {
 		return [uris, uids, contextUri];
 	}
 
-	function parseIcon(icon) {
-		if (icon && Spicetify.SVGIcons[icon]) {
-			return `<svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">${Spicetify.SVGIcons[icon]}</svg>`;
-		}
-		return icon || "";
-	}
-
-	function createIconComponent(icon) {
-		return Spicetify.React.createElement(
-			Spicetify.ReactComponent.IconComponent,
-			{
-				iconSize: "16",
-				dangerouslySetInnerHTML: {
-					__html: parseIcon(icon)
-				}
-			},
-			null
-		);
-	}
-
 	// these classes bridge the gap between react and js, insuring reactivity
 	class Item {
 		constructor({ children, disabled = false, leadingIcon, trailingIcon, divider, onClick, shouldAdd = () => true }) {
@@ -1439,11 +1500,11 @@ Spicetify.ContextMenuV2 = (() => {
 			this._divider = divider;
 
 			this._element = Spicetify.ReactJSX.jsx(() => {
-				const [_children, setChildren] = Spicetify.React.useState(children);
-				const [_disabled, setDisabled] = Spicetify.React.useState(disabled);
-				const [_leadingIcon, setLeadingIcon] = Spicetify.React.useState(leadingIcon);
-				const [_trailingIcon, setTrailingIcon] = Spicetify.React.useState(trailingIcon);
-				const [_divider, setDivider] = Spicetify.React.useState(divider);
+				const [_children, setChildren] = Spicetify.React.useState(this._children);
+				const [_disabled, setDisabled] = Spicetify.React.useState(this._disabled);
+				const [_leadingIcon, setLeadingIcon] = Spicetify.React.useState(this._leadingIcon);
+				const [_trailingIcon, setTrailingIcon] = Spicetify.React.useState(this._trailingIcon);
+				const [_divider, setDivider] = Spicetify.React.useState(this._divider);
 
 				Spicetify.React.useEffect(() => {
 					this._setChildren = setChildren;
@@ -1535,11 +1596,11 @@ Spicetify.ContextMenuV2 = (() => {
 			this._leadingIcon = leadingIcon;
 			this._items = items;
 			this._element = Spicetify.ReactJSX.jsx(() => {
-				const [_text, setText] = Spicetify.React.useState(text);
-				const [_disabled, setDisabled] = Spicetify.React.useState(disabled);
-				const [_leadingIcon, setLeadingIcon] = Spicetify.React.useState(leadingIcon);
-				const [_divider, setDivider] = Spicetify.React.useState(divider);
-				const [_items, setItems] = Spicetify.React.useState(items);
+				const [_text, setText] = Spicetify.React.useState(this._text);
+				const [_disabled, setDisabled] = Spicetify.React.useState(this._disabled);
+				const [_leadingIcon, setLeadingIcon] = Spicetify.React.useState(this._leadingIcon);
+				const [_divider, setDivider] = Spicetify.React.useState(this._divider);
+				const [_items, setItems] = Spicetify.React.useState(this._items);
 
 				Spicetify.React.useEffect(() => {
 					this._setText = setText;
@@ -1646,7 +1707,7 @@ Spicetify.Menu = (() => {
 		constructor(children, isEnabled, onClick, leadingIcon) {
 			super({ children, leadingIcon, onClick: (_, self) => onClick(self), shouldAdd });
 
-			this._isEnabled = isEnabled;
+			this.isEnabled = isEnabled;
 		}
 
 		setState(state) {
@@ -1750,47 +1811,26 @@ Spicetify.ContextMenu = (() => {
 	return { Item, SubMenu };
 })();
 
-Spicetify._cloneSidebarItem = (list, isLibX = false) => {
-	function findChild(parent, key, value) {
-		if (!parent.props) {
-			return null;
-		}
+let navLinkFactoryCtx = null;
+let refreshNavLinks = null;
 
-		if (value && parent.props[key]?.includes(value)) {
-			return parent;
-		}
-		if (!parent.props.children) {
-			return null;
-		}
-		if (Array.isArray(parent.props.children)) {
-			for (const child of parent.props.children) {
-				const ele = findChild(child, key, value);
-				if (ele) {
-					return ele;
-				}
-			}
-		} else if (parent.props.children) {
-			return findChild(parent.props.children, key, value);
-		}
-		return null;
-	}
+Spicetify._renderNavLinks = (list, isTouchScreenUi, isPreLibX = false) => {
+	const [refreshCount, refresh] = Spicetify.React.useReducer(x => x + 1, 0);
+	refreshNavLinks = refresh;
 
-	function conditionalAppend(baseClassname, activeClassname, location) {
-		if (Spicetify.Platform?.History?.location?.pathname.startsWith(location)) {
-			return `${baseClassname} ${activeClassname}`;
-		}
-
-		return baseClassname;
-	}
-
-	if (!Spicetify.React) {
-		setTimeout(Spicetify._cloneSidebarItem, 10, list, isLibX);
+	if (
+		!Spicetify.ReactComponent.ButtonTertiary ||
+		!Spicetify.ReactComponent.Navigation ||
+		!Spicetify.ReactComponent.TooltipWrapper ||
+		!Spicetify.Platform.History ||
+		!Spicetify.Platform.LocalStorageAPI
+	)
 		return;
-	}
 
-	const React = Spicetify.React;
-	const reactObjs = [];
-	const sidebarIsCollapsed = Spicetify.Platform?.LocalStorageAPI?.getItem?.("ylx-sidebar-state") === 1;
+	const navLinkFactory = isTouchScreenUi ? NavLinkGlobal : isPreLibX ? NavLinkSidebarLegacy : NavLinkSidebar;
+
+	if (!navLinkFactoryCtx) navLinkFactoryCtx = Spicetify.React.createContext(null);
+	const registered = [];
 
 	for (const app of list) {
 		let manifest;
@@ -1812,90 +1852,127 @@ Spicetify._cloneSidebarItem = (list, isLibX = false) => {
 		}
 		const icon = manifest.icon || "";
 		const activeIcon = manifest["active-icon"] || icon;
-
-		const appLink = `/${app}`;
-		let obj;
-		let link;
-
-		if (isLibX) {
-			link = findChild(Spicetify._sidebarXItemToClone, "className", "main-yourLibraryX-navLink");
-			obj = React.cloneElement(
-				Spicetify._sidebarXItemToClone,
-				null,
-				React.cloneElement(
-					Spicetify._sidebarXItemToClone.props.children,
-					{
-						label: sidebarIsCollapsed ? appProper : ""
-					},
-					React.cloneElement(
-						link,
-						{
-							to: appLink,
-							isActive: (e, { pathname: t }) => t.startsWith(appLink),
-							className: conditionalAppend("link-subtle main-yourLibraryX-navLink", "main-yourLibraryX-navLinkActive", appLink)
-						},
-						React.createElement(Spicetify.ReactComponent.IconComponent, {
-							className: "home-icon",
-							iconSize: "24",
-							dangerouslySetInnerHTML: {
-								__html: icon
-							}
-						}),
-						React.createElement(Spicetify.ReactComponent.IconComponent, {
-							className: "home-active-icon",
-							iconSize: "24",
-							dangerouslySetInnerHTML: {
-								__html: activeIcon
-							}
-						}),
-						!sidebarIsCollapsed &&
-							React.createElement(
-								Spicetify.ReactComponent.TextComponent,
-								{
-									variant: "balladBold"
-								},
-								appProper
-							)
-					)
-				)
-			);
-		} else {
-			link = findChild(Spicetify._sidebarItemToClone, "className", "main-navBar-navBarLink");
-			obj = React.cloneElement(
-				Spicetify._sidebarItemToClone,
-				null,
-				React.cloneElement(
-					link,
-					{
-						to: appLink,
-						isActive: (e, { pathname: t }) => t.startsWith(appLink),
-						className: conditionalAppend("link-subtle main-navBar-navBarLink", "main-navBar-navBarLinkActive", appLink)
-					},
-					React.createElement("div", {
-						className: "icon collection-icon",
-						dangerouslySetInnerHTML: {
-							__html: icon
-						}
-					}),
-					React.createElement("div", {
-						className: "icon collection-active-icon",
-						dangerouslySetInnerHTML: {
-							__html: activeIcon
-						}
-					}),
-					React.createElement(
-						"span",
-						{
-							className: "ellipsis-one-line main-type-mestoBold"
-						},
-						appProper
-					)
-				)
-			);
-		}
-		reactObjs.push(obj);
+		const appRoutePath = `/${app}`;
+		registered.push({ appProper, appRoutePath, icon, activeIcon });
 	}
-	return reactObjs;
+
+	const style = document.createElement("style");
+	style.innerHTML = `
+:root {
+  --max-custom-navlink-count: 4;
+}
+
+.custom-navlinks-scrollable_container {
+  max-width: calc(48px * var(--max-custom-navlink-count) + 8px * (var(--max-custom-navlink-count) - 1));
+  -webkit-app-region: no-drag;
+}
+
+.custom-navlinks-scrollable_container div[role="presentation"] > *:not(:last-child) {
+  margin-inline-end: 8px;
+}
+
+.custom-navlinks-scrollable_container div[role="presentation"] {
+	display: flex;
+	flex-direction: row;
+}
+
+.custom-navlink {
+  -webkit-app-region: unset;
+}
+	`;
+	document.head.appendChild(style);
+
+	const wrapScrollableContainer = element =>
+		Spicetify.React.createElement(
+			"div",
+			{ className: "custom-navlinks-scrollable_container" },
+			Spicetify.React.createElement(Spicetify.ReactComponent.ScrollableContainer, null, element)
+		);
+
+	const NavLinks = () =>
+		Spicetify.React.createElement(
+			navLinkFactoryCtx.Provider,
+			{ value: navLinkFactory },
+			registered.map(NavLinkElement => Spicetify.React.createElement(NavLink, NavLinkElement, null))
+		);
+
+	return isTouchScreenUi ? wrapScrollableContainer(NavLinks()) : NavLinks();
+};
+
+const NavLink = ({ appProper, appRoutePath, icon, activeIcon }) => {
+	const isActive = Spicetify.Platform.History.location.pathname?.startsWith(appRoutePath);
+	const createIcon = () => createIconComponent(isActive ? activeIcon : icon, 24);
+
+	const NavLinkFactory = Spicetify.React.useContext(navLinkFactoryCtx);
+
+	return NavLinkFactory && Spicetify.React.createElement(NavLinkFactory, { appProper, appRoutePath, createIcon, isActive }, null);
+};
+
+const NavLinkSidebarLegacy = ({ appProper, appRoutePath, createIcon, isActive }) => {
+	return Spicetify.React.createElement(
+		"li",
+		{ className: "main-navBar-navBarItem InvalidDropTarget" },
+		Spicetify.React.createElement(
+			Spicetify.ReactComponent.TooltipWrapper,
+			{ label: appProper, placement: "right" },
+			Spicetify.React.createElement(
+				Spicetify.ReactComponent.Navigation,
+				{
+					to: appRoutePath,
+					referrer: "other",
+					className: Spicetify.classnames("link-subtle", "main-navBar-navBarLink", {
+						"main-navBar-navBarLinkActive active": isActive
+					}),
+					onClick: () => undefined,
+					"aria-label": appProper
+				},
+				createIcon(),
+				Spicetify.React.createElement(Spicetify.ReactComponent.TextComponent, { variant: "mestoBold" }, appProper)
+			)
+		)
+	);
+};
+
+const NavLinkSidebar = ({ appProper, appRoutePath, createIcon, isActive }) => {
+	const isSidebarCollapsed = Spicetify.Platform.LocalStorageAPI.getItem("ylx-sidebar-state") === 1;
+
+	return Spicetify.React.createElement(
+		"li",
+		{ className: "main-yourLibraryX-navItem InvalidDropTarget" },
+		Spicetify.React.createElement(
+			Spicetify.ReactComponent.TooltipWrapper,
+			{ label: isSidebarCollapsed ? appProper : null, disabled: !isSidebarCollapsed, placement: "right" },
+			Spicetify.React.createElement(
+				Spicetify.ReactComponent.Navigation,
+				{
+					to: appRoutePath,
+					referrer: "other",
+					className: Spicetify.classnames("link-subtle", "main-yourLibraryX-navLink", {
+						"main-yourLibraryX-navLinkActive": isActive
+					}),
+					onClick: () => undefined,
+					"aria-label": appProper
+				},
+				createIcon(),
+				!isSidebarCollapsed && Spicetify.React.createElement(Spicetify.ReactComponent.TextComponent, { variant: "balladBold" }, appProper)
+			)
+		)
+	);
+};
+
+const NavLinkGlobal = ({ appProper, appRoutePath, createIcon, isActive }) => {
+	return Spicetify.React.createElement(
+		Spicetify.ReactComponent.TooltipWrapper,
+		{ label: appProper },
+		Spicetify.React.createElement(Spicetify.ReactComponent.ButtonTertiary, {
+			iconOnly: createIcon,
+			className: Spicetify.classnames("link-subtle", "main-globalNav-navLink", "main-globalNav-link-icon", "custom-navlink", {
+				"main-globalNav-navLinkActive": isActive
+			}),
+			"aria-label": appProper,
+			onClick: () => Spicetify.Platform.History.push(appRoutePath)
+		})
+	);
 };
 
 class _HTMLGenericModal extends HTMLElement {
@@ -1989,6 +2066,7 @@ Spicetify.Topbar = (() => {
 	let rightContainer;
 	const leftButtonsStash = new Set();
 	const rightButtonsStash = new Set();
+	const generatedClassName = "Button-medium-medium-buttonTertiary-iconOnly-condensed-disabled-isUsingKeyboard-useBrowserDefaultFocusStyle";
 
 	class Button {
 		constructor(label, icon, onClick, disabled = false, isRight = false) {
@@ -2004,12 +2082,19 @@ Spicetify.Topbar = (() => {
 			this.label = label;
 
 			this.element.appendChild(this.button);
+			const globalHistoryButtons = document.querySelector(".main-globalNav-historyButtons");
 			if (isRight) {
 				this.button.classList.add("encore-over-media-set", "main-topBar-buddyFeed");
+				if (globalHistoryButtons) this.button.classList.add("main-globalNav-buddyFeed");
+
 				rightButtonsStash.add(this.element);
 				rightContainer?.prepend(this.element);
 			} else {
 				this.button.classList.add("main-topBar-button");
+				if (globalHistoryButtons) {
+					this.button.classList.add("main-globalNav-icon", generatedClassName);
+				}
+
 				leftButtonsStash.add(this.element);
 				leftContainer?.append(this.element);
 			}
@@ -2052,18 +2137,32 @@ Spicetify.Topbar = (() => {
 	}
 
 	function waitForTopbarMounted() {
-		leftContainer = document.querySelector(".main-topBar-historyButtons");
+		const globalHistoryButtons = document.querySelector(".main-globalNav-historyButtons");
+		leftContainer = document.querySelector(".main-topBar-historyButtons") ?? globalHistoryButtons;
 		rightContainer = document.querySelector(".main-actionButtons");
 		if (!leftContainer || !rightContainer) {
 			setTimeout(waitForTopbarMounted, 100);
 			return;
 		}
+
+		if (globalHistoryButtons) globalHistoryButtons.style = "gap: 4px; padding-inline: 4px 4px";
 		for (const button of leftButtonsStash) {
 			if (button.parentNode) button.parentNode.removeChild(button);
+
+			const buttonElement = button.querySelector("button");
+			if (globalHistoryButtons) {
+				buttonElement.classList.add("main-globalNav-icon", generatedClassName);
+			} else {
+				buttonElement.classList.remove("main-globalNav-icon", generatedClassName);
+			}
 		}
 		leftContainer.append(...leftButtonsStash);
 		for (const button of rightButtonsStash) {
 			if (button.parentNode) button.parentNode.removeChild(button);
+
+			const buttonElement = button.querySelector("button");
+			if (globalHistoryButtons) buttonElement.classList.add("main-globalNav-buddyFeed");
+			else buttonElement.classList.remove("main-globalNav-buddyFeed");
 		}
 		rightContainer.prepend(...rightButtonsStash);
 	}
@@ -2074,6 +2173,7 @@ Spicetify.Topbar = (() => {
 			setTimeout(waitForPlatform, 100);
 			return;
 		}
+
 		Spicetify.Platform.History.listen(() => waitForTopbarMounted());
 	})();
 
@@ -2287,23 +2387,40 @@ Spicetify.Playbar = (() => {
 	}
 	const { check_spicetify_update, version } = Spicetify.Config;
 	// Skip checking if upgrade check is disabled, or version is Dev/version is not set
-	if (!check_spicetify_update || !version || version === "Dev") {
-		return;
-	}
+	if (!check_spicetify_update || !version || version === "Dev") return;
 	// Fetch latest version from GitHub
 	try {
+		let changelog;
 		const res = await fetch("https://api.github.com/repos/spicetify/spicetify-cli/releases/latest");
 		const { tag_name, html_url, body } = await res.json();
 		const semver = tag_name.slice(1);
-		const changelogRawData = body.match(/## What's Changed([\s\S]*?)\r\n\r/)[1];
-		const changelog = [...changelogRawData.matchAll(/\r\n\*\s(.+?)\sin\shttps/g)]
-			.map(match => {
-				const featureData = match[1].split("@");
-				const feature = featureData[0];
-				const committerID = featureData[1];
-				return `<li>${feature}<a href="https://github.com/${committerID}">${committerID}</a></li>`;
-			})
-			.join("\n");
+		const changelogRawDataOld = body.match(/## What's Changed([\s\S]*?)\r\n\r/)?.[1];
+		if (changelogRawDataOld) {
+			changelog = [...changelogRawDataOld.matchAll(/\r\n\*\s(.+?)\sin\shttps/g)]
+				.map(match => {
+					const featureData = match[1].split("@");
+					const feature = featureData[0];
+					const committerID = featureData[1];
+					return `<li>${feature}<a href="https://github.com/${committerID}">${committerID}</a></li>`;
+				})
+				.join("\n");
+		} else {
+			const sections = body.split("\n## ");
+			const filteredSections = sections.filter(section => !section.startsWith("Compatibility"));
+			const filteredText = filteredSections.join("\n## ");
+			changelog = [...filteredText.matchAll(/- (?:\*\*(.+?)\*\*:? )?(.+?) \(\[(.+?)\]\((.+?)\)\)/g)]
+				.map(match => {
+					const feature = match[1];
+					const description = match[2];
+					const prNumber = match[3];
+					const prLink = match[4];
+					let text = "<li>";
+					if (feature) text += `<strong>${feature}</strong>${!feature.endsWith(":") ? ": " : " "}`;
+					text += `${description} (<a href="${prLink}">${prNumber}</a>)</li>`;
+					return text;
+				})
+				.join("\n");
+		}
 
 		if (semver !== version) {
 			const content = document.createElement("div");

@@ -89,7 +89,7 @@ func Start(version string, extractedAppsPath string, flags Flag) {
 		switch extension {
 		case ".js":
 			utils.ModifyFile(path, func(content string) string {
-				if flags.DisableSentry && fileName == "vendor~xpui.js" {
+				if flags.DisableSentry && fileName == "xpui.js" {
 					content = disableSentry(content)
 				}
 
@@ -124,15 +124,10 @@ func Start(version string, extractedAppsPath string, flags Flag) {
 				if flags.RemoveRTL {
 					content = removeRTL(content)
 				}
-				// Temporary fix for top bar opacity bug
 				if fileName == "xpui.css" {
-					content = fmt.Sprintf(`%s
-					.main-topBar-topbarContent:not(.main-topBar-topbarContentFadeIn)>* {
-						opacity: unset !important;
-					}
-					.main-entityHeader-topbarContent:not(.main-entityHeader-topbarContentFadeIn)>* {
-						opacity: 0 !important;
-					}`, content)
+					content = content + `
+					.main-gridContainer-fixedWidth{grid-template-columns: repeat(auto-fill, var(--column-width));width: calc((var(--column-count) - 1) * var(--grid-gap)) + var(--column-count) * var(--column-width));}.main-cardImage-imageWrapper{background-color: var(--card-color, #333);border-radius: 6px;-webkit-box-shadow: 0 8px 24px rgba(0, 0, 0, .5);box-shadow: 0 8px 24px rgba(0, 0, 0, .5);padding-bottom: 100%;position: relative;width:100%;}.main-cardImage-image,.main-card-imagePlaceholder{height: 100%;left: 0;position: absolute;top: 0;width: 100%}
+					`
 				}
 				return content
 			})
@@ -148,7 +143,7 @@ func Start(version string, extractedAppsPath string, flags Flag) {
 					tags += "<!-- spicetify helpers -->\n"
 				}
 
-				utils.Replace(&content, `<body>`, func(submatches ...string) string {
+				utils.Replace(&content, `<body(\sclass="[^"]*")?>`, func(submatches ...string) string {
 					return fmt.Sprintf("%s\n%s", submatches[0], tags)
 				})
 
@@ -164,6 +159,11 @@ func Start(version string, extractedAppsPath string, flags Flag) {
 func StartCSS(extractedAppsPath string) {
 	appPath := filepath.Join(extractedAppsPath, "xpui")
 	filepath.Walk(appPath, func(path string, info os.FileInfo, err error) error {
+		// temp so text won't be black ._.
+		if info.Name() == "pip-mini-player.css" {
+			return nil
+		}
+
 		if filepath.Ext(info.Name()) == ".css" {
 			utils.ModifyFile(path, colorVariableReplace)
 		}
@@ -306,8 +306,8 @@ func colorVariableReplaceForJS(content string) string {
 }
 
 func disableSentry(input string) string {
-	utils.Replace(&input, `(?:prototype\.)?bindClient(?:=function)?\(\w+\)\{`, func(submatches ...string) string {
-		return fmt.Sprintf("%sreturn;", submatches[0])
+	utils.Replace(&input, `(\("[^"]+sentry.io)/`, func(submatches ...string) string {
+		return fmt.Sprintf(",%s", submatches[0])
 	})
 	return input
 }
@@ -362,6 +362,9 @@ func disableLogging(input string) string {
 	utils.Replace(&input, `key:"createLoggingParams",value:function\([^)]*\)\s*\{`, func(submatches ...string) string {
 		return fmt.Sprintf("%sreturn {interactionIds:null,pageInstanceIds:null};", submatches[0])
 	})
+	utils.Replace(&input, `key:"addEventsToESSData",value:function\([^)]*\)\s*\{`, func(submatches ...string) string {
+		return fmt.Sprintf("%sreturn;", submatches[0])
+	})
 
 	utils.Replace(&input, `registerEventListeners\([^)]*\)\s*\{`, func(submatches ...string) string {
 		return fmt.Sprintf("%sreturn;", submatches[0])
@@ -395,6 +398,9 @@ func disableLogging(input string) string {
 	})
 	utils.Replace(&input, `createLoggingParams\([^)]*\)\s*\{`, func(submatches ...string) string {
 		return fmt.Sprintf("%sreturn {interactionIds:null,pageInstanceIds:null};", submatches[0])
+	})
+	utils.Replace(&input, `addEventsToESSData\([^)]*\)\s*\{`, func(submatches ...string) string {
+		return fmt.Sprintf("%sreturn;", submatches[0])
 	})
 
 	return input
@@ -603,16 +609,9 @@ func exposeAPIs_vendor(input string) string {
 
 	utils.ReplaceOnce(
 		&input,
-		`\(function\(\w+\)\{return \w+\.variant\?function\(\w+\)\{`,
+		`\(function\(\w+\)\{return \w+\.\$?variant\?function\(\w+\)\{`,
 		func(submatches ...string) string {
 			return fmt.Sprintf("Spicetify._fontStyle=%s", submatches[0])
-		})
-
-	utils.ReplaceOnce(
-		&input,
-		`=(?:\(\w\)=>|function\(\w\)\{)\w+ ?\w=\w\.iconSize`,
-		func(submatches ...string) string {
-			return fmt.Sprintf("=Spicetify.ReactComponent.IconComponent%s", submatches[0])
 		})
 
 	// Mapping styled-components classes

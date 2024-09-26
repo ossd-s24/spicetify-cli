@@ -179,7 +179,9 @@ func ReplaceOnce(str *string, pattern string, repl func(submatches ...string) st
 		if firstMatch {
 			firstMatch = false
 			submatches := re.FindStringSubmatch(match)
-			return repl(submatches...)
+			if submatches != nil {
+				return repl(submatches...)
+			}
 		}
 		return match
 	})
@@ -276,7 +278,7 @@ func FindSymbol(debugInfo, content string, clues []string) []string {
 	}
 
 	if len(debugInfo) > 0 {
-		PrintError("cannot find symbol for " + debugInfo)
+		PrintError("Cannot find symbol for " + debugInfo)
 	}
 
 	return nil
